@@ -1,6 +1,5 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Подключаем однопоточное ядро core-st (работает везде без SharedArrayBuffer)
 const ffmpeg = createFFmpeg({
     log: true,
     mainName: 'main',
@@ -52,16 +51,23 @@ processBtn.addEventListener('click', async () => {
         // Считываем результат
         const data = ffmpeg.FS('readFile', outputName);
         
-        // Создаем Blob с явным типом для корректного скачивания
+        // Создаем правильный Blob для iOS Safari
         const blob = new Blob([data.buffer], { type: 'video/mp4' });
         const url = URL.createObjectURL(blob);
 
-        // Настраиваем ссылку
+        // Настройка кнопки
         downloadLink.href = url;
-        downloadLink.download = 'tiktok_ready.mp4';
-        downloadLink.target = '_blank';
         downloadLink.style.display = 'inline-block';
-        downloadLink.innerText = '⬇ Скачать готовое видео';
+        downloadLink.innerText = '⬇ Скачать / Открыть видео';
+
+        // При клике на айфоне открываем прямой Blob
+        downloadLink.onclick = (e) => {
+            // Если мы на iOS Safari, принудительно открываем плеер в новой вкладке
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            if (isIOS) {
+                window.open(url, '_blank');
+            }
+        };
 
         // Очищаем внутреннюю память FFmpeg
         ffmpeg.FS('unlink', inputName);
