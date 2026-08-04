@@ -1,13 +1,19 @@
-// script.js — Полный рефакторинг с расширенной обработкой ошибок и логами
+// script.js — Полная версия с резервными CDN, таймаутами и защитой от зависаний
 document.addEventListener('DOMContentLoaded', () => {
     'use strict';
 
-    // ============ КОНСТАНТЫ И НАСТРОЙКИ ============
+    // ============ КОНСТАНТЫ ============
     const MAX_FILE_SIZE_MB = 500;
     const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
     const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/mov'];
     const OUTPUT_FILENAME = 'tiktok_vq_ultra.mp4';
-    const FFMPEG_LOAD_TIMEOUT_MS = 30000; // 30 секунд на загрузку ядра
+    const FFMPEG_LOAD_TIMEOUT_MS = 20000; // 20 секунд на загрузку ядра
+
+    // Резервные CDN для однопоточного ядра
+    const CORE_PATHS = [
+        'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js',
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
+    ];
 
     // ============ DOM-ЭЛЕМЕНТЫ ============
     const elements = {
@@ -27,107 +33,45 @@ document.addEventListener('DOMContentLoaded', () => {
         errorMessage: document.getElementById('error-message'),
     };
 
-    // ============ СОСТОЯНИЕ ПРИЛОЖЕНИЯ ============
+    // ============ СОСТОЯНИЕ ============
     let currentFile = null;
     let isProcessing = false;
     let resultBlobUrl = null;
     let ffmpegInstance = null;
+    let corePathIndex = 0; // индекс рабочего CDN
 
     // ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
-    // Чтение файла в Uint8Array (аналог fetchFile)
-    function readFileAsUint8Array(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(new Uint8Array(reader.result));
-            reader.onerror = () => reject(new Error('Ошибка чтения файла'));
-            reader.onabort = () => reject(new Error('Чтение файла прервано'));
-            reader.readAsArrayBuffer(file);
-        });
+    function log(msg, type = 'info') {
+        const time = new Date().toISOString().slice(11, 19);
+        if (type === 'error') console.error(`[${time}] ❌ ${msg}`);
+        else if (type === 'warn') console.warn(`[${time}] ⚠️ ${msg}`);
+        else console.log(`[${time}] ℹ️ ${msg}`);
     }
 
-    // Таймаут для асинхронных операций
-    function withTimeout(promise, ms, errorMessage = 'Операция превысила время ожидания') {
+    function withTimeout(promise, ms, errorMsg) {
         return Promise.race([
             promise,
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(errorMessage)), ms)
-            )
+            new Promise((_, reject) => setTimeout(() => reject(new Error(errorMsg)), ms))
         ]);
     }
 
-    // Логирование в консоль с меткой времени
-    function log(message, type = 'info') {
-        const timestamp = new Date().toISOString().slice(11, 19);
-        const prefix = `[${timestamp}]`;
-        switch (type) {
-            case 'error':
-                console.error(`${prefix} ❌ ${message}`);
-                break;
-            case 'warn':
-                console.warn(`${prefix} ⚠️ ${message}`);
-                break;
-            default:
-                console.log(`${prefix} ℹ️ ${message}`);
-        }
-    }
-
-    // Обновление статуса в UI и консоли
     function updateStatus(text, percent = null) {
-        if (elements.statusText) {
-            elements.statusText.textContent = text;
-        }
+        if (elements.statusText) elements.statusText.textContent = text;
         if (percent !== null && elements.progressBar) {
             elements.progressBar.style.width = `${percent}%`;
             elements.progressBar.setAttribute('aria-valuenow', percent);
         }
-        log(`Статус: ${text} ${percent !== null ? `(${percent}%)` : ''}`);
+        log(text);
     }
 
-    // ============ ИНИЦИАЛИЗАЦИЯ FFmpeg с таймаутом ============
-    async function getFFmpeg() {
-        if (ffmpegInstance && ffmpegInstance.isLoaded()) {
-            return ffmpegInstance;
-        }
-
-        // Проверка наличия глобального FFmpeg
-        if (typeof FFmpeg === 'undefined' || typeof FFmpeg.createFFmpeg !== 'function') {
-            throw new Error('Библиотека FFmpeg не загружена. Проверьте интернет-соединение и обновите страницу.');
-        }
-
-        const { createFFmpeg } = FFmpeg;
-
-        ffmpegInstance = createFFmpeg({
-            log: false,           // Отключаем внутренние логи для производительности
-            mainName: 'main',
-            corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js',
+    function readFileAsUint8Array(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(new Uint8Array(reader.result));
+            reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+            reader.onabort = () => reject(new Error('Чтение отменено'));
+            reader.readAsArrayBuffer(file);
         });
-
-        // Установка обработчика прогресса перекодирования
-        ffmpegInstance.setProgress(({ ratio }) => {
-            if (ratio >= 0 && ratio <= 1 && elements.progressBar) {
-                const percent = Math.round(ratio * 100);
-                elements.progressBar.style.width = `${percent}%`;
-                elements.progressBar.setAttribute('aria-valuenow', percent);
-            }
-        });
-
-        log('Загрузка ядра FFmpeg...');
-
-        try {
-            await withTimeout(
-                ffmpegInstance.load(),
-                FFMPEG_LOAD_TIMEOUT_MS,
-                'Не удалось загрузить ядро FFmpeg за отведённое время. Проверьте скорость интернета.'
-            );
-            log('Ядро FFmpeg успешно загружено');
-        } catch (error) {
-            log(`Ошибка загрузки FFmpeg: ${error.message}`, 'error');
-            // Сбрасываем экземпляр, чтобы можно было попробовать снова
-            ffmpegInstance = null;
-            throw error;
-        }
-
-        return ffmpegInstance;
     }
 
     // ============ УПРАВЛЕНИЕ ПАМЯТЬЮ ============
@@ -152,7 +96,50 @@ document.addEventListener('DOMContentLoaded', () => {
             ffmpeg.FS('unlink', filename);
             log(`Файл ${filename} удалён из виртуальной ФС`);
         } catch (e) {
-            // Файл мог уже не существовать
+            // Игнорируем, если файл уже удалён
+        }
+    }
+
+    // ============ ИНИЦИАЛИЗАЦИЯ FFMPEG С РЕЗЕРВНЫМИ CDN ============
+    async function getFFmpeg() {
+        if (ffmpegInstance && ffmpegInstance.isLoaded()) return ffmpegInstance;
+
+        if (typeof FFmpeg === 'undefined' || typeof FFmpeg.createFFmpeg !== 'function') {
+            throw new Error('FFmpeg не загружен. Обновите страницу.');
+        }
+
+        for (let i = corePathIndex; i < CORE_PATHS.length; i++) {
+            try {
+                const corePath = CORE_PATHS[i];
+                log(`Попытка загрузить ядро с ${corePath}`);
+
+                ffmpegInstance = FFmpeg.createFFmpeg({
+                    log: false,
+                    mainName: 'main',
+                    corePath: corePath,
+                    worker: false, // без воркеров для совместимости с iOS
+                });
+
+                ffmpegInstance.setProgress(({ ratio }) => {
+                    if (ratio >= 0 && ratio <= 1 && elements.progressBar) {
+                        const pct = Math.round(ratio * 100);
+                        elements.progressBar.style.width = `${pct}%`;
+                        elements.progressBar.setAttribute('aria-valuenow', pct);
+                    }
+                });
+
+                await withTimeout(ffmpegInstance.load(), FFMPEG_LOAD_TIMEOUT_MS,
+                    'Таймаут загрузки ядра FFmpeg');
+                log('Ядро FFmpeg загружено успешно');
+                corePathIndex = i; // запоминаем рабочий CDN
+                return ffmpegInstance;
+            } catch (err) {
+                log(`CDN ${CORE_PATHS[i]} не сработал: ${err.message}`, 'warn');
+                ffmpegInstance = null;
+                if (i === CORE_PATHS.length - 1) {
+                    throw new Error('Не удалось загрузить ядро FFmpeg с доступных CDN. Проверьте интернет.');
+                }
+            }
         }
     }
 
@@ -168,7 +155,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (file.size > MAX_FILE_SIZE_BYTES) {
-            return { valid: false, error: `Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)} МБ). Максимум: ${MAX_FILE_SIZE_MB} МБ.` };
+            return {
+                valid: false,
+                error: `Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)} МБ). Максимум: ${MAX_FILE_SIZE_MB} МБ.`
+            };
         }
 
         if (file.size === 0) {
@@ -187,16 +177,12 @@ document.addEventListener('DOMContentLoaded', () => {
         log(`Ошибка UI: ${message}`, 'error');
         clearTimeout(window._errorTimeout);
         window._errorTimeout = setTimeout(() => {
-            if (elements.errorMessage) {
-                elements.errorMessage.style.display = 'none';
-            }
+            if (elements.errorMessage) elements.errorMessage.style.display = 'none';
         }, 8000);
     }
 
     function hideError() {
-        if (elements.errorMessage) {
-            elements.errorMessage.style.display = 'none';
-        }
+        if (elements.errorMessage) elements.errorMessage.style.display = 'none';
         clearTimeout(window._errorTimeout);
     }
 
@@ -222,7 +208,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (elements.uploadZone) elements.uploadZone.classList.remove('file-selected');
             if (elements.processBtn) elements.processBtn.disabled = true;
         }
-
         log('Интерфейс сброшен');
     }
 
@@ -252,7 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (elements.uploadZone) elements.uploadZone.classList.add('file-selected');
         if (elements.processBtn) elements.processBtn.disabled = false;
-
         log(`Выбран файл: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} МБ)`);
     }
 
@@ -263,7 +247,6 @@ document.addEventListener('DOMContentLoaded', () => {
         isProcessing = true;
         hideError();
 
-        // Показываем статус
         if (elements.statusContainer) elements.statusContainer.style.display = 'flex';
         if (elements.resultContainer) elements.resultContainer.style.display = 'none';
         if (elements.progressBar) {
@@ -280,34 +263,30 @@ document.addEventListener('DOMContentLoaded', () => {
         const outputName = OUTPUT_FILENAME;
 
         try {
-            // --- Этап 1: Загрузка FFmpeg ---
+            // Этап 1: Загрузка FFmpeg
             updateStatus('Загрузка FFmpeg...', 5);
-            log('Загрузка/инициализация FFmpeg');
             ffmpeg = await getFFmpeg();
 
-            // --- Этап 2: Чтение файла ---
+            // Этап 2: Чтение файла
             updateStatus('Чтение файла...', 10);
-            log('Чтение исходного видео');
             const fileData = await withTimeout(
                 readFileAsUint8Array(currentFile),
-                60000,
-                'Чтение файла заняло слишком много времени. Возможно, файл повреждён.'
+                30000,
+                'Чтение файла зависло. Возможно, файл повреждён.'
             );
             ffmpeg.FS('writeFile', inputName, fileData);
-            log('Файл записан в виртуальную ФС');
+            log('Файл загружен в виртуальную ФС');
 
-            // --- Этап 3: Перекодирование ---
-            updateStatus('Перекодирование (VQ 70+, 1080p60)...', 15);
+            // Этап 3: Перекодирование (облегчённые параметры для стабильности)
+            updateStatus('Обработка (720p, CRF 20)...', 15);
 
             const filterChain = [
                 'fps=60',
-                'tblend=all_mode=average',
-                'scale=1080:-2:flags=lanczos',
-                'eq=contrast=1.05:saturation=1.08',
-                'unsharp=5:5:1.2:5:5:0.5',
+                'scale=720:-2:flags=lanczos',
+                'eq=contrast=1.03:saturation=1.05',
+                'unsharp=3:3:1.0:3:3:0.5'
             ].join(',');
 
-            log('Запуск ffmpeg.run с параметрами...');
             await withTimeout(
                 ffmpeg.run(
                     '-i', inputName,
@@ -315,61 +294,53 @@ document.addEventListener('DOMContentLoaded', () => {
                     '-vf', filterChain,
                     '-c:v', 'libx264',
                     '-profile:v', 'high',
-                    '-level:v', '4.2',
-                    '-crf', '16',
-                    '-maxrate', '25M',
-                    '-bufsize', '30M',
+                    '-crf', '20',
+                    '-maxrate', '15M',
+                    '-bufsize', '20M',
                     '-preset', 'ultrafast',
                     '-pix_fmt', 'yuv420p',
                     '-c:a', 'aac',
-                    '-b:a', '256k',
+                    '-b:a', '192k',
                     '-movflags', '+faststart',
                     outputName
                 ),
-                300000, // 5 минут на обработку
-                'Обработка видео заняла слишком много времени. Попробуйте файл меньшего размера.'
+                180000, // 3 минуты макс
+                'Обработка заняла слишком много времени.'
             );
-            log('Перекодирование завершено');
 
-            // --- Этап 4: Чтение результата ---
-            updateStatus('Сохранение результата...', 95);
+            updateStatus('Сборка результата...', 95);
             const data = ffmpeg.FS('readFile', outputName);
             const blob = new Blob([data.buffer], { type: 'video/mp4' });
 
             revokeResultBlobUrl();
             resultBlobUrl = URL.createObjectURL(blob);
-            log('Blob URL создан');
 
-            // --- Этап 5: Отображение ---
-            updateStatus('Готово!', 100);
             if (elements.videoPlayer) elements.videoPlayer.src = resultBlobUrl;
             if (elements.downloadLink) elements.downloadLink.href = resultBlobUrl;
 
+            updateStatus('Готово!', 100);
             if (elements.statusContainer) elements.statusContainer.style.display = 'none';
             if (elements.resultContainer) elements.resultContainer.style.display = 'flex';
 
-            // Очистка временных файлов
             safeUnlinkFS(ffmpeg, inputName);
             safeUnlinkFS(ffmpeg, outputName);
 
         } catch (error) {
-            log(`Критическая ошибка: ${error.message}`, 'error');
+            log(`Ошибка: ${error.message}`, 'error');
             console.error(error);
 
-            // Очистка ФС при ошибке
             if (ffmpeg && ffmpeg.isLoaded()) {
                 safeUnlinkFS(ffmpeg, inputName);
                 safeUnlinkFS(ffmpeg, outputName);
             }
 
-            // Понятное сообщение пользователю
-            let userMessage = 'Ошибка обработки.';
+            let userMessage = 'Произошла ошибка обработки.';
             if (error.message.includes('Не удалось загрузить ядро')) {
-                userMessage = 'Ошибка загрузки FFmpeg. Проверьте интернет и попробуйте снова.';
+                userMessage = 'Не удалось загрузить FFmpeg. Проверьте интернет-соединение.';
             } else if (error.message.includes('памят')) {
-                userMessage = 'Недостаточно памяти. Закройте другие вкладки и попробуйте файл меньшего размера.';
+                userMessage = 'Недостаточно памяти. Закройте другие вкладки или используйте файл меньшего размера.';
             } else if (error.message.includes('формат') || error.message.includes('codec')) {
-                userMessage = 'Неподдерживаемый формат видео. Конвертируйте в MP4 (H.264) перед загрузкой.';
+                userMessage = 'Неподдерживаемый формат. Конвертируйте видео в MP4 (H.264) перед загрузкой.';
             } else if (error.message.includes('времени')) {
                 userMessage = error.message;
             } else {
@@ -384,6 +355,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             isProcessing = false;
             window.removeEventListener('beforeunload', beforeUnloadHandler);
+            if (elements.spinner) elements.spinner.style.display = 'none';
+            if (elements.processBtn) elements.processBtn.disabled = false;
         }
     }
 
@@ -439,5 +412,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ============ СТАРТОВАЯ ИНИЦИАЛИЗАЦИЯ ============
     resetUI(false);
-    log('Приложение TikTok Ultra HQ Optimizer готово');
+    log('Приложение TikTok Ultra HQ Optimizer готово (v9)');
 });
