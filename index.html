@@ -3,22 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok 4K/60FPS Booster</title>
+    <title>TikTok Video Optimizer</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Подключаем FFmpeg.wasm из CDN -->
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.js"></script>
-    <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/util.js"></script>
+    <!-- Стабильная библиотека FFmpeg.wasm v0.11.6 -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 </head>
 <body>
     <div class="card">
         <h2>TikTok Video Optimizer</h2>
-        <p>Преобразование 4K 120 FPS в звонкий 1080p 60 FPS (Motion Blur + Sharp)</p>
+        <p>Преобразование 4K 120 FPS в 1080p 60 FPS (Motion Blur + Sharp)</p>
         
         <input type="file" id="video-input" accept="video/*">
         <button id="process-btn">Оптимизировать видео</button>
         
         <div id="status">Ожидание файла...</div>
-        <video id="output-video" controls style="display:none; margin-top:15px; width:100%;"></video>
         <a id="download-link" style="display:none;" download="tiktok_ready.mp4">Скачать готовый файл</a>
     </div>
 
