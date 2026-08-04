@@ -1,7 +1,7 @@
-const { FFmpeg } = FFmpegJS;
-const { fetchFile } = FFmpegUtil;
+const { createFFmpeg, fetchFile } = FFmpeg;
 
-const ffmpeg = new FFmpeg();
+// Создаем экземпляр FFmpeg
+const ffmpeg = createFFmpeg({ log: true });
 
 const processBtn = document.getElementById('process-btn');
 const status = document.getElementById('status');
@@ -10,41 +10,61 @@ const downloadLink = document.getElementById('download-link');
 
 processBtn.addEventListener('click', async () => {
     const file = videoInput.files[0];
+    
     if (!file) {
-        alert('Пожалуйста, выбери видео!');
+        alert('Пожалуйста, выбери видеофайл!');
         return;
     }
 
-    status.innerText = 'Загрузка движка FFmpeg...';
-    
-    // Загружаем ядро FFmpeg в браузер
-    if (!ffmpeg.loaded) {
-        await ffmpeg.load();
+    try {
+        processBtn.disabled = true;
+        downloadLink.style.display = 'none';
+        status.innerText = 'Загрузка ядра FFmpeg в браузер...';
+
+        // Загружаем ядро, если оно ещё не инициализировано
+        if (!ffmpeg.isLoaded()) {
+            await ffmpeg.load();
+        }
+
+        status.innerText = 'Чтение файла...';
+        const inputName = 'input_' + Date.now() + '.mp4';
+        const outputName = 'output_' + Date.now() + '.mp4';
+
+        // Записываем файл в виртуальную память FFmpeg
+        ffmpeg.FS('writeFile', inputName, await fetchFile(file));
+
+        status.innerText = 'Обработка видео... (Это может занять некоторое время)';
+
+        // Выполняем патч-команду
+        await ffmpeg.run(
+            '-i', inputName,
+            '-vf', 'tblend=all_mode=average,framestep=2,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
+            '-c:v', 'libx264',
+            '-crf', '18',
+            '-preset', 'ultrafast',
+            '-pix_fmt', 'yuv420p',
+            outputName
+        );
+
+        status.innerText = 'Готово! Видео успешно обработано.';
+
+        // Считываем обработанный файл из виртуальной памяти
+        const data = ffmpeg.FS('readFile', outputName);
+        const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+
+        // Настраиваем ссылку для скачивания
+        downloadLink.href = url;
+        downloadLink.style.display = 'inline-block';
+        downloadLink.innerText = '⬇ Скачать оптимизированный файл';
+
+        // Очищаем память от обработанных файлов
+        ffmpeg.FS('unlink', inputName);
+        ffmpeg.FS('unlink', outputName);
+
+    } catch (error) {
+        console.error(error);
+        status.innerText = 'Ошибка обработки! Проверь консоль браузера.';
+    } finally {
+        processBtn.disabled = false;
     }
-
-    status.innerText = 'Обработка видео (это может занять некоторое время)...';
-
-    // Записываем входящий файл в виртуальную память FFmpeg
-    await ffmpeg.writeFile('input.mp4', await fetchFile(file));
-
-    // Выполняем команду сглаживания 120->60 FPS, ресайза и повышения резкости
-    await ffmpeg.exec([
-        '-i', 'input.mp4',
-        '-vf', 'tblend=all_mode=average,framestep=2,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
-        '-c:v', 'libx264',
-        '-crf', '18',
-        '-preset', 'ultrafast', // Для браузеров используем ultrafast для ускорения
-        '-pix_fmt', 'yuv420p',
-        'output.mp4'
-    ]);
-
-    status.innerText = 'Обработка завершена!';
-
-    // Считываем результат и создаем ссылку на скачивание
-    const data = await ffmpeg.readFile('output.mp4');
-    const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
-    
-    downloadLink.href = url;
-    downloadLink.style.display = 'inline-block';
-    downloadLink.innerText = '⬇ Скачать оптимизированный файл';
 });
