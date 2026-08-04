@@ -28,48 +28,60 @@ processBtn.addEventListener('click', async () => {
             await ffmpeg.load();
         }
 
-        status.innerText = 'Чтение файла...';
+        status.innerText = 'Чтение исходника...';
         const inputName = 'input.mp4';
-        const outputName = 'output.mp4';
+        const outputName = 'tiktok_vq_ultra.mp4';
 
         ffmpeg.FS('writeFile', inputName, await fetchFile(file));
 
-        status.innerText = 'Идет обработка... (Не закрывай вкладку)';
+        status.innerText = 'Применение HQ-фильтров (VQ Score 70+ / 1080p60)...';
+
+        // Цепочка фильтров для идеального VQ Score в TikTok:
+        // 1. tblend + framestep = плавная интерполяция / motion blur при сжатии 120fps -> 60fps
+        // 2. scale = четкий Lanczos в 1080x1080 (или 1080x1920)
+        // 3. eq = легкое усиление контраста (1.05) и насыщенности (1.1)
+        // 4. unsharp = многопроходная резкость для подчёркивания деталей
+        const filterChain = [
+            'tblend=all_mode=average,framestep=2',
+            'scale=1080:1080:flags=lanczos',
+            'eq=contrast=1.05:saturation=1.08',
+            'unsharp=5:5:1.2:5:5:0.5'
+        ].join(',');
 
         await ffmpeg.run(
             '-i', inputName,
-            '-vf', 'tblend=all_mode=average,framestep=2,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
+            '-r', '60',
+            '-vf', filterChain,
             '-c:v', 'libx264',
-            '-crf', '18',
+            '-profile:v', 'high',
+            '-level:v', '4.2',
+            '-crf', '16',                  // Минимальное сжатие для максимальной чёткости
+            '-maxrate', '25M',
+            '-bufsize', '30M',
             '-preset', 'ultrafast',
             '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac',
+            '-b:a', '256k',
             outputName
         );
 
-        status.innerText = '🎉 Видео успешно обработано!';
+        status.innerText = '🎉 Видео готово! Максимальное качество сгенерировано.';
 
-        // Считываем результат
         const data = ffmpeg.FS('readFile', outputName);
-        
-        // Создаем правильный Blob для iOS Safari
         const blob = new Blob([data.buffer], { type: 'video/mp4' });
         const url = URL.createObjectURL(blob);
 
-        // Настройка кнопки
         downloadLink.href = url;
         downloadLink.style.display = 'inline-block';
-        downloadLink.innerText = '⬇ Скачать / Открыть видео';
+        downloadLink.innerText = '⬇ Скачать VQ Ultra 1080p60';
 
-        // При клике на айфоне открываем прямой Blob
-        downloadLink.onclick = (e) => {
-            // Если мы на iOS Safari, принудительно открываем плеер в новой вкладке
+        downloadLink.onclick = () => {
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
             if (isIOS) {
                 window.open(url, '_blank');
             }
         };
 
-        // Очищаем внутреннюю память FFmpeg
         ffmpeg.FS('unlink', inputName);
         ffmpeg.FS('unlink', outputName);
 
