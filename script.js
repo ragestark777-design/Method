@@ -1,4 +1,4 @@
-// script.js — Полный рефакторинг (исправление ошибки fetchFile)
+// script.js — Полный рефакторинг с расширенной обработкой ошибок и логами
 document.addEventListener('DOMContentLoaded', () => {
     'use strict';
 
@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
     const ALLOWED_TYPES = ['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/mov'];
     const OUTPUT_FILENAME = 'tiktok_vq_ultra.mp4';
+    const FFMPEG_LOAD_TIMEOUT_MS = 30000; // 30 секунд на загрузку ядра
 
     // ============ DOM-ЭЛЕМЕНТЫ ============
     const elements = {
@@ -32,35 +33,76 @@ document.addEventListener('DOMContentLoaded', () => {
     let resultBlobUrl = null;
     let ffmpegInstance = null;
 
-    // ============ ЧТЕНИЕ ФАЙЛА В Uint8Array (замена fetchFile) ============
+    // ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
+    // Чтение файла в Uint8Array (аналог fetchFile)
     function readFileAsUint8Array(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(new Uint8Array(reader.result));
             reader.onerror = () => reject(new Error('Ошибка чтения файла'));
+            reader.onabort = () => reject(new Error('Чтение файла прервано'));
             reader.readAsArrayBuffer(file);
         });
     }
 
-    // ============ ИНИЦИАЛИЗАЦИЯ FFmpeg (ленивая) ============
+    // Таймаут для асинхронных операций
+    function withTimeout(promise, ms, errorMessage = 'Операция превысила время ожидания') {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(errorMessage)), ms)
+            )
+        ]);
+    }
+
+    // Логирование в консоль с меткой времени
+    function log(message, type = 'info') {
+        const timestamp = new Date().toISOString().slice(11, 19);
+        const prefix = `[${timestamp}]`;
+        switch (type) {
+            case 'error':
+                console.error(`${prefix} ❌ ${message}`);
+                break;
+            case 'warn':
+                console.warn(`${prefix} ⚠️ ${message}`);
+                break;
+            default:
+                console.log(`${prefix} ℹ️ ${message}`);
+        }
+    }
+
+    // Обновление статуса в UI и консоли
+    function updateStatus(text, percent = null) {
+        if (elements.statusText) {
+            elements.statusText.textContent = text;
+        }
+        if (percent !== null && elements.progressBar) {
+            elements.progressBar.style.width = `${percent}%`;
+            elements.progressBar.setAttribute('aria-valuenow', percent);
+        }
+        log(`Статус: ${text} ${percent !== null ? `(${percent}%)` : ''}`);
+    }
+
+    // ============ ИНИЦИАЛИЗАЦИЯ FFmpeg с таймаутом ============
     async function getFFmpeg() {
         if (ffmpegInstance && ffmpegInstance.isLoaded()) {
             return ffmpegInstance;
         }
 
-        // Проверяем наличие глобального FFmpeg
+        // Проверка наличия глобального FFmpeg
         if (typeof FFmpeg === 'undefined' || typeof FFmpeg.createFFmpeg !== 'function') {
-            throw new Error('FFmpeg не загружен. Обновите страницу.');
+            throw new Error('Библиотека FFmpeg не загружена. Проверьте интернет-соединение и обновите страницу.');
         }
 
-        const { createFFmpeg } = FFmpeg; // fetchFile не используем
+        const { createFFmpeg } = FFmpeg;
 
         ffmpegInstance = createFFmpeg({
-            log: false,
+            log: false,           // Отключаем внутренние логи для производительности
             mainName: 'main',
             corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js',
         });
 
+        // Установка обработчика прогресса перекодирования
         ffmpegInstance.setProgress(({ ratio }) => {
             if (ratio >= 0 && ratio <= 1 && elements.progressBar) {
                 const percent = Math.round(ratio * 100);
@@ -69,7 +111,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        await ffmpegInstance.load();
+        log('Загрузка ядра FFmpeg...');
+
+        try {
+            await withTimeout(
+                ffmpegInstance.load(),
+                FFMPEG_LOAD_TIMEOUT_MS,
+                'Не удалось загрузить ядро FFmpeg за отведённое время. Проверьте скорость интернета.'
+            );
+            log('Ядро FFmpeg успешно загружено');
+        } catch (error) {
+            log(`Ошибка загрузки FFmpeg: ${error.message}`, 'error');
+            // Сбрасываем экземпляр, чтобы можно было попробовать снова
+            ffmpegInstance = null;
+            throw error;
+        }
+
         return ffmpegInstance;
     }
 
@@ -77,6 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function revokeResultBlobUrl() {
         if (resultBlobUrl) {
             URL.revokeObjectURL(resultBlobUrl);
+            log('Предыдущий Blob URL освобождён');
             resultBlobUrl = null;
         }
     }
@@ -92,36 +150,29 @@ document.addEventListener('DOMContentLoaded', () => {
     function safeUnlinkFS(ffmpeg, filename) {
         try {
             ffmpeg.FS('unlink', filename);
+            log(`Файл ${filename} удалён из виртуальной ФС`);
         } catch (e) {
-            // Файл мог уже не существовать — игнорируем
+            // Файл мог уже не существовать
         }
     }
 
     // ============ ВАЛИДАЦИЯ ФАЙЛА ============
     function validateFile(file) {
-        if (!file) {
-            return { valid: false, error: 'Файл не выбран.' };
-        }
+        if (!file) return { valid: false, error: 'Файл не выбран.' };
 
         const isVideo = file.type.startsWith('video/') ||
                         ALLOWED_TYPES.includes(file.type) ||
                         /\.(mp4|mov|m4v)$/i.test(file.name);
         if (!isVideo) {
-            return {
-                valid: false,
-                error: 'Неподдерживаемый формат. Пожалуйста, выберите видеофайл (MP4, MOV).',
-            };
+            return { valid: false, error: 'Неподдерживаемый формат. Выберите MP4 или MOV.' };
         }
 
         if (file.size > MAX_FILE_SIZE_BYTES) {
-            return {
-                valid: false,
-                error: `Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)} МБ). Максимальный размер: ${MAX_FILE_SIZE_MB} МБ.`,
-            };
+            return { valid: false, error: `Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)} МБ). Максимум: ${MAX_FILE_SIZE_MB} МБ.` };
         }
 
         if (file.size === 0) {
-            return { valid: false, error: 'Файл пуст. Выберите другой.' };
+            return { valid: false, error: 'Файл пуст.' };
         }
 
         return { valid: true, error: null };
@@ -133,12 +184,13 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.errorMessage.textContent = message;
             elements.errorMessage.style.display = 'block';
         }
+        log(`Ошибка UI: ${message}`, 'error');
         clearTimeout(window._errorTimeout);
         window._errorTimeout = setTimeout(() => {
             if (elements.errorMessage) {
                 elements.errorMessage.style.display = 'none';
             }
-        }, 6000);
+        }, 8000);
     }
 
     function hideError() {
@@ -170,6 +222,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (elements.uploadZone) elements.uploadZone.classList.remove('file-selected');
             if (elements.processBtn) elements.processBtn.disabled = true;
         }
+
+        log('Интерфейс сброшен');
     }
 
     // ============ ОБРАБОТКА ВЫБОРА ФАЙЛА ============
@@ -198,6 +252,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (elements.uploadZone) elements.uploadZone.classList.add('file-selected');
         if (elements.processBtn) elements.processBtn.disabled = false;
+
+        log(`Выбран файл: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} МБ)`);
     }
 
     // ============ ОБРАБОТКА ВИДЕО ============
@@ -207,6 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isProcessing = true;
         hideError();
 
+        // Показываем статус
         if (elements.statusContainer) elements.statusContainer.style.display = 'flex';
         if (elements.resultContainer) elements.resultContainer.style.display = 'none';
         if (elements.progressBar) {
@@ -223,15 +280,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const outputName = OUTPUT_FILENAME;
 
         try {
-            updateStatus('Загрузка ядра FFmpeg...', 5);
+            // --- Этап 1: Загрузка FFmpeg ---
+            updateStatus('Загрузка FFmpeg...', 5);
+            log('Загрузка/инициализация FFmpeg');
             ffmpeg = await getFFmpeg();
 
-            // Чтение файла в Uint8Array (собственная реализация, не fetchFile)
-            updateStatus('Чтение исходного видео...', 10);
-            const fileData = await readFileAsUint8Array(currentFile);
+            // --- Этап 2: Чтение файла ---
+            updateStatus('Чтение файла...', 10);
+            log('Чтение исходного видео');
+            const fileData = await withTimeout(
+                readFileAsUint8Array(currentFile),
+                60000,
+                'Чтение файла заняло слишком много времени. Возможно, файл повреждён.'
+            );
             ffmpeg.FS('writeFile', inputName, fileData);
+            log('Файл записан в виртуальную ФС');
 
-            updateStatus('Применение HQ-фильтров (VQ 70+, 1080p60)...', 15);
+            // --- Этап 3: Перекодирование ---
+            updateStatus('Перекодирование (VQ 70+, 1080p60)...', 15);
 
             const filterChain = [
                 'fps=60',
@@ -241,60 +307,73 @@ document.addEventListener('DOMContentLoaded', () => {
                 'unsharp=5:5:1.2:5:5:0.5',
             ].join(',');
 
-            await ffmpeg.run(
-                '-i', inputName,
-                '-r', '60',
-                '-vf', filterChain,
-                '-c:v', 'libx264',
-                '-profile:v', 'high',
-                '-level:v', '4.2',
-                '-crf', '16',
-                '-maxrate', '25M',
-                '-bufsize', '30M',
-                '-preset', 'ultrafast',
-                '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac',
-                '-b:a', '256k',
-                '-movflags', '+faststart',
-                outputName
+            log('Запуск ffmpeg.run с параметрами...');
+            await withTimeout(
+                ffmpeg.run(
+                    '-i', inputName,
+                    '-r', '60',
+                    '-vf', filterChain,
+                    '-c:v', 'libx264',
+                    '-profile:v', 'high',
+                    '-level:v', '4.2',
+                    '-crf', '16',
+                    '-maxrate', '25M',
+                    '-bufsize', '30M',
+                    '-preset', 'ultrafast',
+                    '-pix_fmt', 'yuv420p',
+                    '-c:a', 'aac',
+                    '-b:a', '256k',
+                    '-movflags', '+faststart',
+                    outputName
+                ),
+                300000, // 5 минут на обработку
+                'Обработка видео заняла слишком много времени. Попробуйте файл меньшего размера.'
             );
+            log('Перекодирование завершено');
 
-            updateStatus('Чтение результата...', 95);
-
+            // --- Этап 4: Чтение результата ---
+            updateStatus('Сохранение результата...', 95);
             const data = ffmpeg.FS('readFile', outputName);
             const blob = new Blob([data.buffer], { type: 'video/mp4' });
 
             revokeResultBlobUrl();
             resultBlobUrl = URL.createObjectURL(blob);
+            log('Blob URL создан');
 
+            // --- Этап 5: Отображение ---
             updateStatus('Готово!', 100);
-
             if (elements.videoPlayer) elements.videoPlayer.src = resultBlobUrl;
             if (elements.downloadLink) elements.downloadLink.href = resultBlobUrl;
 
             if (elements.statusContainer) elements.statusContainer.style.display = 'none';
             if (elements.resultContainer) elements.resultContainer.style.display = 'flex';
 
+            // Очистка временных файлов
             safeUnlinkFS(ffmpeg, inputName);
             safeUnlinkFS(ffmpeg, outputName);
 
         } catch (error) {
-            console.error('Ошибка обработки видео:', error);
+            log(`Критическая ошибка: ${error.message}`, 'error');
+            console.error(error);
 
+            // Очистка ФС при ошибке
             if (ffmpeg && ffmpeg.isLoaded()) {
                 safeUnlinkFS(ffmpeg, inputName);
                 safeUnlinkFS(ffmpeg, outputName);
             }
 
-            let userMessage = 'Произошла ошибка при обработке видео.';
-            if (error.message) {
-                if (error.message.includes('Out of memory') || error.message.includes('memory')) {
-                    userMessage = 'Недостаточно памяти. Попробуйте видео меньшего размера или закройте другие вкладки.';
-                } else if (error.message.includes('format') || error.message.includes('codec')) {
-                    userMessage = 'Неподдерживаемый формат видео. Попробуйте конвертировать в MP4 перед загрузкой.';
-                } else {
-                    userMessage = `Ошибка: ${error.message}`;
-                }
+            // Понятное сообщение пользователю
+            let userMessage = 'Ошибка обработки.';
+            if (error.message.includes('Не удалось загрузить ядро')) {
+                userMessage = 'Ошибка загрузки FFmpeg. Проверьте интернет и попробуйте снова.';
+            } else if (error.message.includes('памят')) {
+                userMessage = 'Недостаточно памяти. Закройте другие вкладки и попробуйте файл меньшего размера.';
+            } else if (error.message.includes('формат') || error.message.includes('codec')) {
+                userMessage = 'Неподдерживаемый формат видео. Конвертируйте в MP4 (H.264) перед загрузкой.';
+            } else if (error.message.includes('времени')) {
+                userMessage = error.message;
+            } else {
+                userMessage = `Ошибка: ${error.message}`;
             }
 
             showError(userMessage);
@@ -308,19 +387,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
-    function updateStatus(text, percent = null) {
-        if (elements.statusText) elements.statusText.textContent = text;
-        if (percent !== null && elements.progressBar) {
-            elements.progressBar.style.width = `${percent}%`;
-            elements.progressBar.setAttribute('aria-valuenow', percent);
-        }
-    }
-
+    // ============ ОБРАБОТЧИК ЗАКРЫТИЯ ВКЛАДКИ ============
     function beforeUnloadHandler(e) {
         if (isProcessing) {
             e.preventDefault();
-            e.returnValue = 'Идёт обработка видео. Если вы закроете вкладку, прогресс будет потерян.';
+            e.returnValue = 'Идёт обработка видео. При закрытии прогресс будет потерян.';
             return e.returnValue;
         }
     }
@@ -328,23 +399,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // ============ ПРИВЯЗКА СОБЫТИЙ ============
     if (elements.videoInput) {
         elements.videoInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) handleFileSelect(file);
+            handleFileSelect(e.target.files[0]);
         });
     }
 
     if (elements.uploadZone) {
-        elements.uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            elements.uploadZone.style.borderColor = '#fe2c55';
-        });
-        elements.uploadZone.addEventListener('dragleave', () => {
-            elements.uploadZone.style.borderColor = '#33374a';
-            if (currentFile) elements.uploadZone.style.borderColor = 'var(--accent-color)';
-        });
+        elements.uploadZone.addEventListener('dragover', (e) => e.preventDefault());
         elements.uploadZone.addEventListener('drop', (e) => {
             e.preventDefault();
-            elements.uploadZone.style.borderColor = '#33374a';
             const file = e.dataTransfer.files[0];
             if (file) {
                 const dt = new DataTransfer();
@@ -356,15 +418,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (elements.processBtn) {
-        elements.processBtn.addEventListener('click', () => {
-            if (!isProcessing && currentFile) processVideo();
-        });
+        elements.processBtn.addEventListener('click', processVideo);
     }
 
     if (elements.newFileBtn) {
         elements.newFileBtn.addEventListener('click', () => {
             resetUI(false);
-            if (elements.uploadZone) elements.uploadZone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            elements.uploadZone?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
     }
 
@@ -372,16 +432,12 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.downloadLink.addEventListener('click', (e) => {
             if (!resultBlobUrl) {
                 e.preventDefault();
-                showError('Видео ещё не обработано.');
+                showError('Нет обработанного видео.');
             }
         });
     }
 
-    // Инициализация
+    // ============ СТАРТОВАЯ ИНИЦИАЛИЗАЦИЯ ============
     resetUI(false);
-
-    console.log('✅ TikTok Ultra HQ Optimizer инициализирован.');
-    console.log('   Поддерживаемые форматы: MP4, MOV');
-    console.log('   Макс. размер файла:', MAX_FILE_SIZE_MB, 'МБ');
-    console.log('   Целевые параметры: 1080p, 60 FPS, CRF 16, High Profile');
+    log('Приложение TikTok Ultra HQ Optimizer готово');
 });
