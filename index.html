@@ -2,30 +2,71 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok Video Optimizer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TikTok Ultra HQ Optimizer</title>
 
-    <!-- Встроенная мобильная консоль Eruda -->
+    <!-- Консоль отладки Eruda (можно оставить или убрать при необходимости) -->
     <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
     <script>eruda.init();</script>
 
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     
-    <!-- Стабильный JS обёртчик FFmpeg -->
+    <!-- FFmpeg.js -->
     <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.0/dist/ffmpeg.min.js"></script>
 </head>
 <body>
-    <div class="card">
-        <h2>TikTok Video Optimizer</h2>
-        <p>Преобразование 4K 120 FPS в 1080p 60 FPS (Motion Blur + Sharp)</p>
-        
-        <input type="file" id="video-input" accept="video/*">
-        <button id="process-btn">Оптимизировать видео</button>
-        
-        <div id="status">Ожидание файла...</div>
-        <a id="download-link" style="display:none;" target="_blank">Загрузка...</a>
+    <div class="container">
+        <header class="header">
+            <div class="logo-badge">PRO VQ 70+</div>
+            <h1>TikTok Video Optimizer</h1>
+            <p class="subtitle">Перекодирование в 1080p 60 FPS • Max Bitrate • Lanczos Sharp</p>
+        </header>
+
+        <main class="card">
+            <div class="upload-zone" id="upload-zone">
+                <input type="file" id="video-input" accept="video/*">
+                <div class="upload-content">
+                    <div class="upload-icon">🎬</div>
+                    <span class="upload-title" id="file-name">Выбрать видеофайл</span>
+                    <span class="upload-desc">Поддерживаются 4K, 120 FPS, MP4, MOV</span>
+                </div>
+            </div>
+
+            <button id="process-btn" class="btn-primary" disabled>
+                <span>Оптимизировать видео</span>
+            </button>
+
+            <div id="status-container" class="status-container" style="display: none;">
+                <div class="spinner" id="spinner"></div>
+                <div id="status-text" class="status-text">Ожидание...</div>
+            </div>
+
+            <!-- Зона результата -->
+            <div id="result-container" class="result-container" style="display: none;">
+                <div class="success-badge">🎉 Видео успешно обработано!</div>
+                
+                <div class="player-wrapper">
+                    <video id="video-player" controls playsinline></video>
+                </div>
+
+                <div class="ios-instruction">
+                    💡 <strong>Как сохранить на iPhone:</strong> Зажми видео пальцем выше и выбери <span>«Сохранить в Фото»</span> или нажми кнопку ниже для открытия в плеере Safari.
+                </div>
+
+                <a id="download-link" class="btn-secondary" target="_blank">
+                    🔗 Открыть видео в новой вкладке
+                </a>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Оптимизировано для выгрузки через браузерную версию TikTok</p>
+        </footer>
     </div>
 
-    <script src="script.js?v=4"></script>
+    <script src="script.js?v=6"></script>
 </body>
 </html>
