@@ -1,11 +1,11 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Явно задаем пути к ядру, WASM и Worker с одного надежного CDN
+// Подключаем чисто однопоточную сборку ядра, 
+// которая НЕ использует SharedArrayBuffer и работает везде!
 const ffmpeg = createFFmpeg({
     log: true,
-    corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-    wasmPath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.wasm',
-    workerPath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.worker.js'
+    mainName: 'main',
+    corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
 });
 
 const processBtn = document.getElementById('process-btn');
@@ -24,9 +24,9 @@ processBtn.addEventListener('click', async () => {
     try {
         processBtn.disabled = true;
         downloadLink.style.display = 'none';
-        status.innerText = 'Загрузка компонентов FFmpeg (10-15 сек)...';
+        status.innerText = 'Загрузка однопоточного ядра FFmpeg (10-15 сек)...';
 
-        // Загружаем ядро
+        // Инициализируем сборку
         if (!ffmpeg.isLoaded()) {
             await ffmpeg.load();
         }
@@ -37,9 +37,9 @@ processBtn.addEventListener('click', async () => {
 
         ffmpeg.FS('writeFile', inputName, await fetchFile(file));
 
-        status.innerText = 'Обработка видео... (Не закрывай вкладку)';
+        status.innerText = 'Идет обработка видео (не закрывай вкладку)...';
 
-        // Команда сжатия и обработки
+        // Выполняем обработку
         await ffmpeg.run(
             '-i', inputName,
             '-vf', 'tblend=all_mode=average,framestep=2,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
@@ -50,7 +50,7 @@ processBtn.addEventListener('click', async () => {
             outputName
         );
 
-        status.innerText = 'Готово! Видео успешно обработано.';
+        status.innerText = 'Готово! Видео обработано.';
 
         const data = ffmpeg.FS('readFile', outputName);
         const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
@@ -64,7 +64,7 @@ processBtn.addEventListener('click', async () => {
 
     } catch (error) {
         console.error("Ошибка:", error);
-        status.innerHTML = `<span style="color: #ff4444;">Ошибка: ${error.message || 'Сбой при загрузке ядра'}</span>`;
+        status.innerHTML = `<span style="color: #ff4444;">Ошибка: ${error.message || 'Сбой ядра'}</span>`;
     } finally {
         processBtn.disabled = false;
     }
