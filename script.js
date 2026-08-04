@@ -1,7 +1,6 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Подключаем чисто однопоточную сборку ядра, 
-// которая НЕ использует SharedArrayBuffer и работает везде!
+// Однопоточное ядро (core-st), которому НЕ нужен SharedArrayBuffer (идеально для Safari/iOS)
 const ffmpeg = createFFmpeg({
     log: true,
     mainName: 'main',
@@ -24,9 +23,8 @@ processBtn.addEventListener('click', async () => {
     try {
         processBtn.disabled = true;
         downloadLink.style.display = 'none';
-        status.innerText = 'Загрузка однопоточного ядра FFmpeg (10-15 сек)...';
+        status.innerText = 'Загрузка однопоточного ядра FFmpeg...';
 
-        // Инициализируем сборку
         if (!ffmpeg.isLoaded()) {
             await ffmpeg.load();
         }
@@ -39,7 +37,6 @@ processBtn.addEventListener('click', async () => {
 
         status.innerText = 'Идет обработка видео (не закрывай вкладку)...';
 
-        // Выполняем обработку
         await ffmpeg.run(
             '-i', inputName,
             '-vf', 'tblend=all_mode=average,framestep=2,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
