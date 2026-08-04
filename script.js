@@ -1,6 +1,6 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Однопоточное ядро (core-st), которому НЕ нужен SharedArrayBuffer (идеально для Safari/iOS)
+// Подключаем однопоточное ядро core-st (работает везде без SharedArrayBuffer)
 const ffmpeg = createFFmpeg({
     log: true,
     mainName: 'main',
@@ -23,19 +23,19 @@ processBtn.addEventListener('click', async () => {
     try {
         processBtn.disabled = true;
         downloadLink.style.display = 'none';
-        status.innerText = 'Загрузка однопоточного ядра FFmpeg...';
+        status.innerText = 'Загрузка ядра FFmpeg...';
 
         if (!ffmpeg.isLoaded()) {
             await ffmpeg.load();
         }
 
-        status.innerText = 'Загрузка файла в память...';
+        status.innerText = 'Чтение файла...';
         const inputName = 'input.mp4';
         const outputName = 'output.mp4';
 
         ffmpeg.FS('writeFile', inputName, await fetchFile(file));
 
-        status.innerText = 'Идет обработка видео (не закрывай вкладку)...';
+        status.innerText = 'Идет обработка... (Не закрывай вкладку)';
 
         await ffmpeg.run(
             '-i', inputName,
@@ -47,21 +47,29 @@ processBtn.addEventListener('click', async () => {
             outputName
         );
 
-        status.innerText = 'Готово! Видео обработано.';
+        status.innerText = '🎉 Видео успешно обработано!';
 
+        // Считываем результат
         const data = ffmpeg.FS('readFile', outputName);
-        const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
+        
+        // Создаем Blob с явным типом для корректного скачивания
+        const blob = new Blob([data.buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
 
+        // Настраиваем ссылку
         downloadLink.href = url;
+        downloadLink.download = 'tiktok_ready.mp4';
+        downloadLink.target = '_blank';
         downloadLink.style.display = 'inline-block';
         downloadLink.innerText = '⬇ Скачать готовое видео';
 
+        // Очищаем внутреннюю память FFmpeg
         ffmpeg.FS('unlink', inputName);
         ffmpeg.FS('unlink', outputName);
 
     } catch (error) {
         console.error("Ошибка:", error);
-        status.innerHTML = `<span style="color: #ff4444;">Ошибка: ${error.message || 'Сбой ядра'}</span>`;
+        status.innerHTML = `<span style="color: #ff4444;">Ошибка: ${error.message || 'Сбой обработки'}</span>`;
     } finally {
         processBtn.disabled = false;
     }
