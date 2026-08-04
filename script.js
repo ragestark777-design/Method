@@ -1,7 +1,10 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Создаем экземпляр FFmpeg
-const ffmpeg = createFFmpeg({ log: true });
+// Отключаем лишние потоки для стабильности на мобильных устройствах
+const ffmpeg = createFFmpeg({ 
+    log: true,
+    mainName: 'main'
+});
 
 const processBtn = document.getElementById('process-btn');
 const status = document.getElementById('status');
@@ -12,30 +15,35 @@ processBtn.addEventListener('click', async () => {
     const file = videoInput.files[0];
     
     if (!file) {
-        alert('Пожалуйста, выбери видеофайл!');
+        alert('Выбери видеофайл!');
         return;
     }
 
     try {
         processBtn.disabled = true;
         downloadLink.style.display = 'none';
-        status.innerText = 'Загрузка ядра FFmpeg в браузер...';
+        
+        // Проверка поддержки памяти браузером
+        if (!window.SharedArrayBuffer) {
+            status.innerHTML = '<span style="color: #ff4444;">⚠️ Браузер еще не обновил заголовки безопасности. Пожалуйста, ОБНОВИ СТРАНИЦУ еще раз!</span>';
+            processBtn.disabled = false;
+            return;
+        }
 
-        // Загружаем ядро, если оно ещё не инициализировано
+        status.innerText = 'Загрузка ядра FFmpeg...';
+
         if (!ffmpeg.isLoaded()) {
             await ffmpeg.load();
         }
 
-        status.innerText = 'Чтение файла...';
-        const inputName = 'input_' + Date.now() + '.mp4';
-        const outputName = 'output_' + Date.now() + '.mp4';
+        status.innerText = 'Подготовка видео файла...';
+        const inputName = 'input.mp4';
+        const outputName = 'output.mp4';
 
-        // Записываем файл в виртуальную память FFmpeg
         ffmpeg.FS('writeFile', inputName, await fetchFile(file));
 
-        status.innerText = 'Обработка видео... (Это может занять некоторое время)';
+        status.innerText = 'Обработка (Motion Blur + Scale + Sharp)...';
 
-        // Выполняем патч-команду
         await ffmpeg.run(
             '-i', inputName,
             '-vf', 'tblend=all_mode=average,framestep=2,scale=1080:1920:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
@@ -46,24 +54,21 @@ processBtn.addEventListener('click', async () => {
             outputName
         );
 
-        status.innerText = 'Готово! Видео успешно обработано.';
+        status.innerText = 'Готово! Файл успешно обработан.';
 
-        // Считываем обработанный файл из виртуальной памяти
         const data = ffmpeg.FS('readFile', outputName);
         const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
 
-        // Настраиваем ссылку для скачивания
         downloadLink.href = url;
         downloadLink.style.display = 'inline-block';
-        downloadLink.innerText = '⬇ Скачать оптимизированный файл';
+        downloadLink.innerText = '⬇ Скачать готовое видео';
 
-        // Очищаем память от обработанных файлов
         ffmpeg.FS('unlink', inputName);
         ffmpeg.FS('unlink', outputName);
 
     } catch (error) {
-        console.error(error);
-        status.innerText = 'Ошибка обработки! Проверь консоль браузера.';
+        console.error("Ошибка FFmpeg:", error);
+        status.innerHTML = `<span style="color: #ff4444;">Ошибка: ${error.message || 'Нехватка памяти или сбой ядра'}</span>`;
     } finally {
         processBtn.disabled = false;
     }
