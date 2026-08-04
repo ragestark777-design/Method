@@ -2,64 +2,96 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>TikTok Ultra HQ Optimizer</title>
 
-    <!-- Консоль отладки Eruda (можно оставить или убрать при необходимости) -->
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
+    <!--
+    🔧 Консоль Eruda для отладки на iOS
+    Раскомментируйте следующие 2 строки, если нужно отладить на устройстве без Safari DevTools
+    -->
+    <!-- <script src="https://cdn.jsdelivr.net/npm/eruda"></script> -->
+    <!-- <script>eruda.init();</script> -->
 
-    <link rel="stylesheet" href="style.css?v=6">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- FFmpeg.js -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet">
+
+    <!-- FFmpeg.wasm: однопоточная сборка для iOS Safari (без SharedArrayBuffer) -->
     <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.0/dist/ffmpeg.min.js"></script>
+
+    <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
     <div class="container">
+        <!-- Шапка -->
         <header class="header">
             <div class="logo-badge">PRO VQ 70+</div>
             <h1>TikTok Video Optimizer</h1>
-            <p class="subtitle">Перекодирование в 1080p 60 FPS • Max Bitrate • Lanczos Sharp</p>
+            <p class="subtitle">Перекодирование в 1080p 60 FPS · Max Bitrate · Lanczos Sharp</p>
         </header>
 
+        <!-- Основная карточка -->
         <main class="card">
-            <div class="upload-zone" id="upload-zone">
-                <input type="file" id="video-input" accept="video/*">
+            <!-- Зона загрузки файла -->
+            <div class="upload-zone" id="upload-zone" role="button" aria-label="Выбрать видеофайл">
+                <input type="file" id="video-input" accept="video/*" aria-hidden="true">
                 <div class="upload-content">
-                    <div class="upload-icon">🎬</div>
+                    <div class="upload-icon" aria-hidden="true">🎬</div>
                     <span class="upload-title" id="file-name">Выбрать видеофайл</span>
-                    <span class="upload-desc">Поддерживаются 4K, 120 FPS, MP4, MOV</span>
+                    <span class="upload-desc" id="upload-desc">MP4, MOV · до 500 МБ</span>
                 </div>
             </div>
 
+            <!-- Кнопка запуска обработки -->
             <button id="process-btn" class="btn-primary" disabled>
+                <span class="btn-icon" aria-hidden="true">⚡</span>
                 <span>Оптимизировать видео</span>
             </button>
 
+            <!-- Индикатор прогресса / статуса -->
             <div id="status-container" class="status-container" style="display: none;">
-                <div class="spinner" id="spinner"></div>
-                <div id="status-text" class="status-text">Ожидание...</div>
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+                <div class="status-row">
+                    <div class="spinner" id="spinner" aria-hidden="true"></div>
+                    <div id="status-text" class="status-text">Загрузка ядра FFmpeg...</div>
+                </div>
             </div>
 
-            <!-- Зона результата -->
+            <!-- Контейнер результата обработки -->
             <div id="result-container" class="result-container" style="display: none;">
-                <div class="success-badge">🎉 Видео успешно обработано!</div>
-                
+                <div class="success-badge" aria-live="polite">🎉 Видео успешно оптимизировано!</div>
+
                 <div class="player-wrapper">
-                    <video id="video-player" controls playsinline></video>
+                    <video id="video-player"
+                           controls
+                           playsinline
+                           webkit-playsinline
+                           preload="metadata"
+                           aria-label="Предпросмотр обработанного видео">
+                    </video>
                 </div>
 
                 <div class="ios-instruction">
-                    💡 <strong>Как сохранить на iPhone:</strong> Зажми видео пальцем выше и выбери <span>«Сохранить в Фото»</span> или нажми кнопку ниже для открытия в плеере Safari.
+                    💡 <strong>Как сохранить на iPhone:</strong>
+                    зажмите видео пальцем и выберите
+                    <span>«Сохранить видео»</span> или нажмите кнопку ниже.
                 </div>
 
-                <a id="download-link" class="btn-secondary" target="_blank">
+                <a id="download-link" class="btn-secondary" target="_blank" rel="noopener noreferrer">
                     🔗 Открыть видео в новой вкладке
                 </a>
+
+                <button id="new-file-btn" class="btn-outline">
+                    🔄 Обработать другое видео
+                </button>
             </div>
+
+            <!-- Сообщения об ошибках валидации -->
+            <div id="error-message" class="error-message" style="display: none;" role="alert"></div>
         </main>
 
         <footer class="footer">
@@ -67,6 +99,6 @@
         </footer>
     </div>
 
-    <script src="script.js?v=6"></script>
+    <script src="script.js?v=8"></script>
 </body>
 </html>
